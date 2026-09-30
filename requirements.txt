@@ -1,0 +1,2 @@
+ray[data]==2.58.0
+sentence-transformers>=3,<6
