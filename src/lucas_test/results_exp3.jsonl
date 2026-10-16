@@ -1,0 +1,3 @@
+{"experiment": "exp3_paralelismo", "n_workers": 1, "n_blocks": 8, "batch_size": 64, "mean_time_s": 595.9449573040008, "std_time_s": 7.290626553909331, "throughput_emb_s": 3.3560146377407283, "speedup": 1.0, "ideal_speedup": 1.0}
+{"experiment": "exp3_paralelismo", "n_workers": 2, "n_blocks": 8, "batch_size": 64, "mean_time_s": 400.5266860961914, "std_time_s": 67.43499525461833, "throughput_emb_s": 4.9934250810935366, "speedup": 1.4879032483765073, "ideal_speedup": 2.0}
+{"experiment": "exp3_paralelismo", "n_workers": 4, "n_blocks": 8, "batch_size": 64, "mean_time_s": 280.33634366989133, "std_time_s": 7.756555540257376, "throughput_emb_s": 7.134287241596795, "speedup": 2.1258212527939397, "ideal_speedup": 4.0}

@@ -1,0 +1,4 @@
+{"experiment": "exp2_batching", "batch_size": 32, "n_blocks": 8, "concurrency": 2, "mean_time_s": 288.0743313789368, "std_time_s": 1.1782032222212242, "throughput_emb_s": 6.942652580070293, "mean_memory_pct": 85.82000000000001}
+{"experiment": "exp2_batching", "batch_size": 64, "n_blocks": 8, "concurrency": 2, "mean_time_s": 366.18730387687685, "std_time_s": 61.98545472363723, "throughput_emb_s": 5.461685806213697, "mean_memory_pct": 87.08}
+{"experiment": "exp2_batching", "batch_size": 128, "n_blocks": 8, "concurrency": 2, "mean_time_s": 370.9137432575226, "std_time_s": 30.659035013400445, "throughput_emb_s": 5.392089229250843, "mean_memory_pct": 76.12}
+{"experiment": "exp2_batching", "batch_size": 256, "n_blocks": 8, "concurrency": 2, "mean_time_s": 346.9879590034485, "std_time_s": 15.651984760137545, "throughput_emb_s": 5.763888769350994, "mean_memory_pct": 69.52}

@@ -8,7 +8,7 @@ import platform
 import random
 import time
 
-from generate_dataset import positive
+from amina_test.generate_dataset import positive
 
 
 def configurations(args):
@@ -43,7 +43,7 @@ def main():
 
     # Importação adiada: --help funciona sem instalar dependências.
     import ray
-    from embedder import Embedder
+    from amina_test.embedder import Embedder
 
     with args.data.open(newline="", encoding="utf-8") as file:
         records = list(csv.DictReader(file))
