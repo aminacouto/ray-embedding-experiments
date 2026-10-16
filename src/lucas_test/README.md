@@ -34,7 +34,7 @@ Ative o ambiente de acordo com o seu sistema operacional:
   source .venv-ray-test/bin/activate
   ```
 
-> 💡 **Como saber se deu certo?** O nome `(.venv-ray-test)` aparecerá no início da linha do seu terminal.
+> **Como saber se deu certo?** O nome `(.venv-ray-test)` aparecerá no início da linha do seu terminal.
 
 ### 4. Atualizar o Gerenciador de Pacotes (Opcional, mas recomendado)
 Com o ambiente ativado, atualize o `pip`:
@@ -50,7 +50,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🛑 Como Desativar o Ambiente
+## Como Desativar o Ambiente
 Quando terminar de trabalhar no projeto e quiser sair do ambiente virtual, basta digitar:
 ```bash
 deactivate
