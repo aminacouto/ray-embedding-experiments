@@ -11,21 +11,44 @@
 export PATH="$HOME/.local/bin:$PATH"
 cd ~/ray-exp
 
-# ── Identifica os nós alocados ────────────────────────────────────
 NODES=($(scontrol show hostnames "$SLURM_JOB_NODELIST"))
 HEAD=${NODES[0]}
 WORKER=${NODES[1]}
-HEAD_IP=$(getent hosts "$HEAD" | awk '{print $1}')
+
+echo "DEBUG: HEAD=$HEAD WORKER=$WORKER"
+echo "DEBUG: getent=$(getent hosts $HEAD 2>&1)"
+echo "DEBUG: nslookup=$(nslookup $HEAD 2>/dev/null | awk '/Address/ && !/#/{print $2}' | head -1)"
+
+# Tenta múltiplas formas de resolver o IP
+HEAD_IP=$(getent hosts "$HEAD" 2>/dev/null | awk '{print $1}' | grep -v ':' | head -1)
+
+if [ -z "$HEAD_IP" ]; then
+    HEAD_IP=$(nslookup "$HEAD" 2>/dev/null | awk '/Address/ && !/#/{print $2}' | grep -v ':' | head -1)
+fi
+
+if [ -z "$HEAD_IP" ]; then
+    HEAD_IP=$(host "$HEAD" 2>/dev/null | awk '/has address/{print $4}' | head -1)
+fi
+
+if [ -z "$HEAD_IP" ]; then
+    # Fallback: pega o IP diretamente no nó head via srun
+    HEAD_IP=$(srun --nodes=1 --ntasks=1 --nodelist="$HEAD" \
+        python3 -c "import socket; print(socket.gethostbyname(socket.gethostname()))")
+fi
+
 RAY_PORT=6379
 
 echo "============================================================"
 echo "  Job ID  : $SLURM_JOB_ID"
 echo "  Head    : $HEAD ($HEAD_IP)"
 echo "  Worker  : $WORKER"
-echo "  Nós     : $SLURM_JOB_NUM_NODES"
 echo "============================================================"
 
-# ── PARTE 1: inicia Ray head no nó 0 via srun ────────────────────
+if [ -z "$HEAD_IP" ]; then
+    echo "ERRO FATAL: nao foi possivel resolver o IP do head node $HEAD"
+    exit 1
+fi
+
 srun --nodes=1 --ntasks=1 --nodelist="$HEAD" \
     ray start --head \
         --node-ip-address="$HEAD_IP" \
@@ -33,52 +56,57 @@ srun --nodes=1 --ntasks=1 --nodelist="$HEAD" \
         --num-cpus=48 \
         --dashboard-host=0.0.0.0 \
         --block &
-
 HEAD_PID=$!
-echo "Ray head iniciado (PID $HEAD_PID), aguardando..."
 sleep 20
 
-# ── PARTE 2: conecta worker no nó 1 via srun ────────────────────
 srun --nodes=1 --ntasks=1 --nodelist="$WORKER" \
     ray start \
         --address="${HEAD_IP}:${RAY_PORT}" \
         --num-cpus=48 \
         --block &
-
 WORKER_PID=$!
-echo "Ray worker iniciado (PID $WORKER_PID), aguardando conexão..."
 sleep 25
 
-# ── Verifica cluster ─────────────────────────────────────────────
 python3 - <<PYEOF
 import ray
-ray.init(address="auto", ignore_reinit_error=True)
+ray.init(address="${HEAD_IP}:${RAY_PORT}", ignore_reinit_error=True)
 nodes = [n for n in ray.nodes() if n["Alive"]]
-print(f"Nós ativos no cluster Ray: {len(nodes)}")
+print(f"Nos ativos: {len(nodes)}")
 for n in nodes:
     print(f"  {n['NodeManagerHostname']} — {int(n['Resources'].get('CPU',0))} CPUs")
 ray.shutdown()
 PYEOF
 
-# ── Baseline (1 worker — necessário pro speedup) ─────────────────
 echo ""
 echo "Rodando baseline..."
 python3 - <<PYEOF
 import ray, time, json
+import numpy as np
 
-ray.init(address="auto", ignore_reinit_error=True)
+ray.init(address="${HEAD_IP}:${RAY_PORT}", ignore_reinit_error=True)
 
 DATASET    = "dataset.jsonl"
 BATCH_SIZE = 64
 
 class EmbeddingModel:
     def __init__(self):
-        from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer("intfloat/multilingual-e5-small")
+        import torch
+        from transformers import AutoTokenizer, AutoModel
+        self.tokenizer = AutoTokenizer.from_pretrained("intfloat/multilingual-e5-small")
+        self.model = AutoModel.from_pretrained("intfloat/multilingual-e5-small")
+        self.model.eval()
+        self.model.to("cpu")
+
     def __call__(self, batch):
-        batch["embedding"] = self.model.encode(
-            batch["text"].tolist(), batch_size=BATCH_SIZE,
-            show_progress_bar=False, normalize_embeddings=True)
+        import torch
+        texts = batch["text"].tolist()
+        encoded = self.tokenizer(texts, padding=True, truncation=True,
+                                  max_length=512, return_tensors="pt")
+        with torch.no_grad():
+            out = self.model(**encoded)
+        emb = out.last_hidden_state[:, 0, :].cpu().numpy()
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        batch["embedding"] = emb / np.where(norms == 0, 1, norms)
         return batch
 
 ds = ray.data.read_json(DATASET).repartition(8)
@@ -99,13 +127,13 @@ print(f"Baseline: {baseline_time:.2f}s | {rec['throughput_emb_s']} emb/s")
 ray.shutdown()
 PYEOF
 
-# ── Experimento 3: varia concurrency ─────────────────────────────
 echo ""
 echo "Iniciando Experimento 3..."
 python3 - <<PYEOF
 import ray, time, json, statistics, psutil, socket
+import numpy as np
 
-ray.init(address="auto", ignore_reinit_error=True)
+ray.init(address="${HEAD_IP}:${RAY_PORT}", ignore_reinit_error=True)
 
 DATASET    = "dataset.jsonl"
 N_BLOCKS   = 8
@@ -123,21 +151,31 @@ concurrency_values = sorted({1, max(1, total_cpus // 4),
 
 print(f"Cluster: {len(nodes)} nos, {total_cpus} CPUs totais")
 print(f"Testando concurrency: {concurrency_values}")
-print(f"Baseline de referencia: {baseline_time:.2f}s")
+print(f"Baseline: {baseline_time:.2f}s")
 
 class EmbeddingModel:
     def __init__(self):
-        from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer("intfloat/multilingual-e5-small")
+        import torch
+        from transformers import AutoTokenizer, AutoModel
+        self.tokenizer = AutoTokenizer.from_pretrained("intfloat/multilingual-e5-small")
+        self.model = AutoModel.from_pretrained("intfloat/multilingual-e5-small")
+        self.model.eval()
+        self.model.to("cpu")
         self.hostname = socket.gethostname()
+
     def __call__(self, batch):
-        batch["embedding"] = self.model.encode(
-            batch["text"].tolist(), batch_size=BATCH_SIZE,
-            show_progress_bar=False, normalize_embeddings=True)
-        batch["worker_host"] = [self.hostname] * len(batch["text"])
+        import torch
+        texts = batch["text"].tolist()
+        encoded = self.tokenizer(texts, padding=True, truncation=True,
+                                  max_length=512, return_tensors="pt")
+        with torch.no_grad():
+            out = self.model(**encoded)
+        emb = out.last_hidden_state[:, 0, :].cpu().numpy()
+        norms = np.linalg.norm(emb, axis=1, keepdims=True)
+        batch["embedding"] = emb / np.where(norms == 0, 1, norms)
+        batch["worker_host"] = [self.hostname] * len(texts)
         return batch
 
-all_results = []
 with open(OUT, "w") as out:
     for n_workers in concurrency_values:
         times, throughputs, mem_peaks = [], [], []
@@ -182,8 +220,6 @@ with open(OUT, "w") as out:
         }
         out.write(json.dumps(rec) + "\n")
         out.flush()
-        all_results.append(rec)
-
         print(f"  >> {mean_t:.2f}s | speedup {speedup_real:.2f}x "
               f"(ideal {speedup_ideal:.0f}x) | eficiencia {efficiency:.0f}%")
 
@@ -191,12 +227,10 @@ ray.shutdown()
 print(f"\nResultados salvos em: {OUT}")
 PYEOF
 
-# ── Gráficos ─────────────────────────────────────────────────────
 echo ""
 echo "Gerando graficos..."
 python3 ~/ray-exp/6_analise_exp3.py
 
-# ── Encerra Ray em todos os nós ───────────────────────────────────
 echo ""
 echo "Encerrando Ray..."
 srun --nodes=1 --ntasks=1 --nodelist="$HEAD"   ray stop --force
